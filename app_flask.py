@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
+from flask import Flask, render_template, request, jsonify, send_file
 import pandas as pd
 import os
 import zipfile
@@ -12,7 +12,7 @@ import threading
 import time
 import glob
 import shutil
-import json
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 
@@ -26,15 +26,6 @@ ZIP_COMPRESS_LEVEL = int(os.environ.get("ZIP_COMPRESS_LEVEL", "1"))
 def ensure_csv_dir():
     try:
         CSV_DIR.mkdir(parents=True, exist_ok=True)
-        for old in glob.glob(str(BASE_DIR / "Report_*.csv")):
-            src = Path(old)
-            dest = CSV_DIR / src.name
-            if dest.exists():
-                dest = CSV_DIR / f"{src.stem}__{int(src.stat().st_mtime)}{src.suffix}"
-            try:
-                shutil.move(str(src), str(dest))
-            except:
-                pass
     except:
         pass
 
@@ -109,10 +100,32 @@ def index():
     files = list_csvs()
     return render_template('index.html', files=files)
 
+@app.route('/api/upload', methods=['POST'])
+def upload():
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file'}), 400
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        if not file.filename.endswith('.csv'):
+            return jsonify({'error': 'Only CSV files allowed'}), 400
+        ensure_csv_dir()
+        filename = secure_filename(file.filename)
+        if not filename.startswith('Report_'):
+            return jsonify({'error': 'Only Report_*.csv files allowed'}), 400
+        dest = CSV_DIR / filename
+        file.save(str(dest))
+        return jsonify({'success': True, 'filename': filename})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/load/<path:filename>')
 def load_csv(filename):
     try:
         csv_path = CSV_DIR / filename if not os.path.isabs(filename) else Path(filename)
+        if not csv_path.exists():
+            csv_path = BASE_DIR / filename
         if not csv_path.exists():
             return jsonify({'error': 'File not found'}), 404
         df, f = read_csv_cached(str(csv_path))
@@ -143,6 +156,8 @@ def download():
             return jsonify({'error': 'No filename'}), 400
         csv_path = CSV_DIR / filename if not os.path.isabs(filename) else Path(filename)
         if not csv_path.exists():
+            csv_path = BASE_DIR / filename
+        if not csv_path.exists():
             return jsonify({'error': 'File not found'}), 404
         
         df, f = read_csv_cached(str(csv_path))
@@ -165,11 +180,9 @@ def download():
         downloaded = 0
         
         def fetch(item):
-            nonlocal downloaded
             url, path = item
             try:
                 if path.exists() and path.stat().st_size > 0:
-                    downloaded += 1
                     return True
                 r = session.get(url, timeout=(10, 30), stream=True)
                 if r.status_code == 200:
@@ -178,7 +191,6 @@ def download():
                             if chunk:
                                 fh.write(chunk)
                     r.close()
-                    downloaded += 1
                     return True
                 r.close()
                 return False
