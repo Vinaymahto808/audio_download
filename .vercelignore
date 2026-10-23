@@ -1,0 +1,13 @@
+csv_files/
+*.csv
+recordings_*/
+*.wav
+*.zip
+*.part
+__pycache__/
+*.pyc
+*.jpeg
+*.jpg
+*.png
+~$*
+.git
