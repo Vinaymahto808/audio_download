@@ -19,8 +19,8 @@ app = Flask(__name__)
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 BASE_DIR = Path(__file__).resolve().parent
 CSV_DIR = Path(os.environ.get("CSV_DIR", "/tmp/csv_files"))
-DL_WORKERS = int(os.environ.get("DL_WORKERS", "16"))
-CHUNK = 256 * 1024
+DL_WORKERS = int(os.environ.get("DL_WORKERS", "8"))
+CHUNK = 512 * 1024
 ZIP_COMPRESS_LEVEL = int(os.environ.get("ZIP_COMPRESS_LEVEL", "1"))
 
 def ensure_csv_dir():
@@ -55,7 +55,7 @@ def get_filtered(df, min_sec=5):
 
 _csv_cache = OrderedDict()
 _cache_lock = threading.Lock()
-CACHE_SIZE = 3
+CACHE_SIZE = 2
 
 def read_csv_cached(csv_path):
     st = os.stat(csv_path)
@@ -74,7 +74,6 @@ def read_csv_cached(csv_path):
 
 def list_csvs():
     ensure_csv_dir()
-    # Copy bundled CSVs
     bundled = glob.glob(str(BASE_DIR / "csv_files" / "*.csv"))
     for b in bundled:
         dest = CSV_DIR / os.path.basename(b)
@@ -95,7 +94,7 @@ def get_session():
     with _session_lock:
         if _session is None:
             s = requests.Session()
-            retry = Retry(total=2, connect=2, read=2, backoff_factor=0.4,
+            retry = Retry(total=1, connect=1, read=1, backoff_factor=0.3,
                           status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET"])
             adapter = HTTPAdapter(pool_connections=DL_WORKERS, pool_maxsize=DL_WORKERS,
                                   max_retries=retry)
@@ -145,7 +144,7 @@ def load_csv(filename):
         df, f = read_csv_cached(str(csv_path))
         preview_cols = ["Customer Number", "Customer Name", "Dial Status", "Start Time", "Total Duration", "Agent Name"]
         preview = []
-        for _, row in f.head(100).iterrows():
+        for _, row in f.head(50).iterrows():
             item = {}
             for c in preview_cols:
                 if c in row:
@@ -182,19 +181,40 @@ def download():
         
         df, f = read_csv_cached(str(csv_path))
         csv_base = csv_path.stem
-        out_dir = Path(f"/tmp/recordings_{csv_base}_gt5s")
+        out_dir = Path(f"/tmp/rec_{csv_base[:20]}")
+        zip_path = Path(f"/tmp/rec_{csv_base[:20]}.zip")
+        
+        # Clean up old files
+        try:
+            if out_dir.exists():
+                shutil.rmtree(out_dir)
+            if zip_path.exists():
+                zip_path.unlink()
+        except:
+            pass
+        
         out_dir.mkdir(exist_ok=True)
         
         urls_ser = f["Recording URL"].astype("string").str.strip()
         names = urls_ser.str.rsplit("/", n=1).str[-1].fillna("")
         urls_list = []
+        seen = set()
         for url, name in zip(urls_ser.tolist(), names.tolist()):
-            if url and name:
-                urls_list.append((url, out_dir / name))
+            if not url: continue
+            name = name or "rec.wav"
+            if name in seen:
+                stem, ext = os.path.splitext(name)
+                k = 1
+                while f"{stem}_{k}{ext}" in seen: k += 1
+                name = f"{stem}_{k}{ext}"
+            seen.add(name)
+            urls_list.append((url, out_dir / name))
         
         total = len(urls_list)
         if total == 0:
             return jsonify({'error': 'No recordings'}), 400
+        if total > 500:
+            return jsonify({'error': f'Too many files ({total}). Vercel has limited space. Use local app for large downloads.'}), 400
         
         session = get_session()
         def fetch(item):
@@ -202,7 +222,7 @@ def download():
             try:
                 if path.exists() and path.stat().st_size > 0:
                     return True
-                r = session.get(url, timeout=(10, 30), stream=True)
+                r = session.get(url, timeout=(10, 25), stream=True)
                 if r.status_code == 200:
                     with open(path, "wb") as fh:
                         for chunk in r.iter_content(chunk_size=CHUNK):
@@ -218,11 +238,16 @@ def download():
         with ThreadPoolExecutor(max_workers=DL_WORKERS) as ex:
             list(ex.map(fetch, urls_list))
         
-        zip_path = Path(f"/tmp/recordings_{csv_base}_gt5s.zip")
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=ZIP_COMPRESS_LEVEL) as z:
             for _, p in urls_list:
                 if p.exists():
                     z.write(p, arcname=p.name)
+        
+        # Delete wav files to free space
+        try:
+            shutil.rmtree(out_dir)
+        except:
+            pass
         
         return send_file(str(zip_path), as_attachment=True, download_name=f"recordings_{csv_base}_gt5s.zip")
     except Exception as e:

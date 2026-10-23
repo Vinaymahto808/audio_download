@@ -16,7 +16,7 @@
         button { background: #0066ff; color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; }
         button:hover { background: #0052cc; }
         button:disabled { background: #333; cursor: not-allowed; }
-        .stats { display: flex; gap: 30px; margin: 15px 0; }
+        .stats { display: flex; gap: 30px; margin: 15px 0; flex-wrap: wrap; }
         .stat { color: #888; }
         .stat-value { color: #fff; font-weight: 600; }
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
@@ -27,12 +27,14 @@
         .status.show { display: block; }
         .upload-section { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
         input[type=file] { background: #252525; color: #e0e0e0; border: 1px solid #444; padding: 8px; border-radius: 6px; }
+        .warning { background: #3a2f00; border: 1px solid #665500; color: #ffcc00; padding: 10px; border-radius: 6px; margin-top: 10px; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🎙️ MCube Call Recordings Downloader</h1>
         <p class="subtitle">Download call recordings from CSV files (>5 seconds)</p>
+        <div class="warning">⚠️ Vercel has limited space - Max 500 recordings per download. For larger downloads use local app.</div>
         
         <div class="card">
             <div class="card-title">Upload CSV File</div>
@@ -60,7 +62,7 @@
                 <div class="stat">Total Rows: <span class="stat-value" id="totalRows">0</span></div>
                 <div class="stat">Recordings > 5s: <span class="stat-value" id="filteredRows">0</span></div>
             </div>
-            <button onclick="downloadAll()" id="downloadBtn">Download All as ZIP</button>
+            <button onclick="downloadAll()" id="downloadBtn">Download All as ZIP (Max 500)</button>
             <div class="status" id="status"></div>
             <div style="overflow-x: auto;">
                 <table id="previewTable">
@@ -124,7 +126,7 @@
             const status = document.getElementById('status');
             btn.disabled = true;
             btn.textContent = 'Downloading... (This may take time)';
-            status.textContent = 'Starting download... Please wait.';
+            status.textContent = 'Starting download... Please wait (max 60s timeout).';
             status.classList.add('show');
             try {
                 const res = await fetch('/api/download', {
@@ -135,6 +137,7 @@
                 if (res.headers.get('content-type').includes('application/json')) {
                     const data = await res.json();
                     alert(data.error);
+                    status.textContent = data.error;
                 } else {
                     const blob = await res.blob();
                     const url = window.URL.createObjectURL(blob);
@@ -149,7 +152,7 @@
                 status.textContent = 'Error occurred';
             }
             btn.disabled = false;
-            btn.textContent = 'Download All as ZIP';
+            btn.textContent = 'Download All as ZIP (Max 500)';
         }
     </script>
 </body>
