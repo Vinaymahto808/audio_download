@@ -113,7 +113,6 @@ st.caption(f"CSV Folder: {CSV_DIR} | Fast parallel downloads")
 with st.sidebar:
     st.header("Settings")
     dl_workers = st.slider("Download Workers", 16, 100, DL_WORKERS)
-    global DL_WORKERS
     DL_WORKERS = dl_workers
     
     st.divider()
