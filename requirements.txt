@@ -1,8 +1,6 @@
-streamlit==1.40.1
+Flask==3.0.3
 pandas==2.2.3
 requests==2.32.3
 urllib3==2.2.3
 numpy==1.26.4
-altair==5.4.1
-pyarrow==18.0.0
-Pillow==10.4.0
+gunicorn==23.0.0
