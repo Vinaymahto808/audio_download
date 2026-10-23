@@ -11,8 +11,5 @@
       "src": "/(.*)",
       "dest": "api/index.py"
     }
-  ],
-  "env": {
-    "GRADIO_ANALYTICS_ENABLED": "False"
-  }
+  ]
 }
