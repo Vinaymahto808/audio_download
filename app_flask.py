@@ -73,9 +73,9 @@ def read_csv_cached(csv_path):
     return df, filtered
 
 def list_csvs():
-    files = glob.glob(str(CSV_DIR / "Report_*.csv")) + glob.glob(str(Path("/tmp") / "Report_*.csv"))
-    # Also check if bundled CSVs exist
-    bundled = glob.glob(str(BASE_DIR / "csv_files" / "Report_*.csv"))
+    ensure_csv_dir()
+    # Copy bundled CSVs
+    bundled = glob.glob(str(BASE_DIR / "csv_files" / "*.csv"))
     for b in bundled:
         dest = CSV_DIR / os.path.basename(b)
         if not dest.exists():
@@ -83,7 +83,7 @@ def list_csvs():
                 shutil.copy2(b, dest)
             except:
                 pass
-    files = glob.glob(str(CSV_DIR / "Report_*.csv")) + bundled
+    files = glob.glob(str(CSV_DIR / "*.csv"))
     files = list(set([str(Path(f).resolve()) for f in files]))
     return sorted(files, key=os.path.getmtime, reverse=True)
 
@@ -118,12 +118,10 @@ def upload():
         file = request.files['file']
         if file.filename == '':
             return jsonify({'error': 'No file selected'}), 400
-        if not file.filename.endswith('.csv'):
+        if not file.filename.lower().endswith('.csv'):
             return jsonify({'error': 'Only CSV files allowed'}), 400
         ensure_csv_dir()
         filename = secure_filename(file.filename)
-        if not filename.startswith('Report_'):
-            return jsonify({'error': 'Only Report_*.csv files allowed'}), 400
         dest = CSV_DIR / filename
         file.save(str(dest))
         return jsonify({'success': True, 'filename': filename})
@@ -138,7 +136,10 @@ def load_csv(filename):
         if not csv_path.exists():
             bundled = BASE_DIR / "csv_files" / filename
             if bundled.exists():
-                shutil.copy2(bundled, csv_path)
+                try:
+                    shutil.copy2(bundled, csv_path)
+                except:
+                    pass
         if not csv_path.exists():
             return jsonify({'error': 'File not found. Upload CSV from your device.'}), 404
         df, f = read_csv_cached(str(csv_path))
@@ -172,7 +173,10 @@ def download():
         if not csv_path.exists():
             bundled = BASE_DIR / "csv_files" / filename
             if bundled.exists():
-                shutil.copy2(bundled, csv_path)
+                try:
+                    shutil.copy2(bundled, csv_path)
+                except:
+                    pass
         if not csv_path.exists():
             return jsonify({'error': 'File not found'}), 404
         
