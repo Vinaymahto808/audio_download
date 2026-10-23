@@ -12,7 +12,6 @@ import threading
 import time
 import glob
 import shutil
-from datetime import datetime
 
 st.set_page_config(page_title="MCube Call Recordings Downloader", layout="wide", page_icon="🎙️")
 
@@ -68,9 +67,7 @@ _cache_lock = threading.Lock()
 CACHE_SIZE = 3
 
 def read_csv_cached(csv_path):
-    st_key = str(csv_path)
-    mtime = os.path.getmtime(csv_path)
-    key = (st_key, mtime)
+    key = (str(csv_path), os.path.getmtime(csv_path))
     with _cache_lock:
         if key in _csv_cache:
             _csv_cache.move_to_end(key)
@@ -84,8 +81,10 @@ def read_csv_cached(csv_path):
     return df, filtered
 
 def list_csvs():
-    files = glob.glob(str(CSV_DIR / "Report_*.csv")) + glob.glob(str(BASE_DIR / "Report_*.csv"))
-    files = [str(Path(f).resolve()) for f in files]
+    files = glob.glob(str(CSV_DIR / "*.csv")) + glob.glob(str(BASE_DIR / "*.csv"))
+    files = [str(Path(f).resolve()) for f in files if Path(f).name.lower().endswith('.csv')]
+    # remove duplicates
+    files = list(dict.fromkeys(files))
     return sorted(files, key=os.path.getmtime, reverse=True)
 
 _session = None
@@ -109,47 +108,47 @@ def get_session():
 st.title("🎙️ MCube Call Recordings Downloader")
 st.caption(f"CSV Folder: {CSV_DIR} | Fast parallel downloads")
 
-# Sidebar
 with st.sidebar:
     st.header("Settings")
-    dl_workers = st.slider("Download Workers", 16, 100, DL_WORKERS)
-    DL_WORKERS = dl_workers
+    dl_workers = st.slider("Download Workers", 16, 100, DL_WORKERS, key="workers")
+    st.session_state['dl_workers'] = dl_workers
     
     st.divider()
-    uploaded = st.file_uploader("Upload CSV", type=['csv'])
-    if uploaded:
+    uploaded = st.file_uploader("Upload CSV", type=['csv'], key="uploader")
+    if uploaded is not None:
         ensure_csv_dir()
         dest = CSV_DIR / uploaded.name
         with open(dest, 'wb') as f:
             f.write(uploaded.getbuffer())
         st.success(f"Uploaded: {uploaded.name}")
-        st.cache_data.clear()
+        time.sleep(1)
+        st.rerun()
 
-# Main content
 files = list_csvs()
 if not files:
-    st.warning(f"No CSV files found. Upload a Report_*.csv file or place it in {CSV_DIR}")
+    st.warning(f"No CSV files found. Upload any CSV file or place it in {CSV_DIR}")
     st.stop()
 
 csv_options = {os.path.basename(f): f for f in files}
-selected_name = st.selectbox("Select CSV File", list(csv_options.keys()))
+selected_name = st.selectbox("Select CSV File", list(csv_options.keys()), key="csv_select")
 csv_path = csv_options[selected_name]
 
 try:
     df, filtered = read_csv_cached(csv_path)
     st.success(f"Loaded: {selected_name} | Total: {len(df)} rows | Recordings > 5s: {len(filtered)}")
     
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Rows", len(df))
-    col2.metric("Recordings > 5s", len(filtered))
-    col3.metric("Files to Download", len(filtered))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Rows", len(df))
+    c2.metric("Recordings > 5s", len(filtered))
+    c3.metric("Files to Download", len(filtered))
     
     st.subheader("Preview (First 100)")
     preview_cols = [c for c in ["Customer Number", "Customer Name", "Dial Status", "Start Time", "Total Duration", "Agent Name"] if c in filtered.columns]
     if preview_cols:
-        st.dataframe(filtered[preview_cols].head(100), use_container_width=True)
+        st.dataframe(filtered[preview_cols].head(100), use_container_width=True, hide_index=True)
     
     if st.button("🚀 Download All (>5s) as ZIP", type="primary", use_container_width=True):
+        workers = st.session_state.get('dl_workers', DL_WORKERS)
         progress_bar = st.progress(0)
         status_text = st.empty()
         
@@ -163,12 +162,13 @@ try:
         if id_col:
             ids = filtered[id_col].astype("string").str.strip().fillna("")
             names = names.where(names != "", ids)
-        names = names.where(names != "", pd.Series([f"{i}.wav" for i in range(len(names))], index=names.index, dtype="string"))
+        names = names.where(names != "", pd.Series([f"{i}.wav" for i in range(len(names))], index=names.index))
         
         urls, seen = [], set()
         for url, name in zip(urls_ser.tolist(), names.tolist()):
-            if not url: continue
-            name = name or "recording.wav"
+            if not url or url == '<NA>': continue
+            name = str(name)
+            if not name or name == '<NA>': name = "recording.wav"
             if name in seen:
                 stem, ext = os.path.splitext(name)
                 k = 1
@@ -203,7 +203,7 @@ try:
                 except: pass
                 return False
         
-        with ThreadPoolExecutor(max_workers=DL_WORKERS) as ex:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
             futs = [ex.submit(fetch, u) for u in urls]
             for fut in as_completed(futs):
                 done += 1
