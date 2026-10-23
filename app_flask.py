@@ -18,8 +18,8 @@ app = Flask(__name__)
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 BASE_DIR = Path(__file__).resolve().parent
-CSV_DIR = Path(os.environ.get("CSV_DIR", BASE_DIR / "csv_files"))
-DL_WORKERS = int(os.environ.get("DL_WORKERS", "32"))
+CSV_DIR = Path(os.environ.get("CSV_DIR", "/tmp/csv_files"))
+DL_WORKERS = int(os.environ.get("DL_WORKERS", "16"))
 CHUNK = 256 * 1024
 ZIP_COMPRESS_LEVEL = int(os.environ.get("ZIP_COMPRESS_LEVEL", "1"))
 
@@ -73,8 +73,18 @@ def read_csv_cached(csv_path):
     return df, filtered
 
 def list_csvs():
-    files = glob.glob(str(CSV_DIR / "Report_*.csv")) + glob.glob(str(BASE_DIR / "Report_*.csv"))
-    files = [str(Path(f).resolve()) for f in files]
+    files = glob.glob(str(CSV_DIR / "Report_*.csv")) + glob.glob(str(Path("/tmp") / "Report_*.csv"))
+    # Also check if bundled CSVs exist
+    bundled = glob.glob(str(BASE_DIR / "csv_files" / "Report_*.csv"))
+    for b in bundled:
+        dest = CSV_DIR / os.path.basename(b)
+        if not dest.exists():
+            try:
+                shutil.copy2(b, dest)
+            except:
+                pass
+    files = glob.glob(str(CSV_DIR / "Report_*.csv")) + bundled
+    files = list(set([str(Path(f).resolve()) for f in files]))
     return sorted(files, key=os.path.getmtime, reverse=True)
 
 _session = None
@@ -123,11 +133,14 @@ def upload():
 @app.route('/api/load/<path:filename>')
 def load_csv(filename):
     try:
-        csv_path = CSV_DIR / filename if not os.path.isabs(filename) else Path(filename)
+        filename = os.path.basename(filename)
+        csv_path = CSV_DIR / filename
         if not csv_path.exists():
-            csv_path = BASE_DIR / filename
+            bundled = BASE_DIR / "csv_files" / filename
+            if bundled.exists():
+                shutil.copy2(bundled, csv_path)
         if not csv_path.exists():
-            return jsonify({'error': 'File not found'}), 404
+            return jsonify({'error': 'File not found. Upload CSV from your device.'}), 404
         df, f = read_csv_cached(str(csv_path))
         preview_cols = ["Customer Number", "Customer Name", "Dial Status", "Start Time", "Total Duration", "Agent Name"]
         preview = []
@@ -154,9 +167,12 @@ def download():
         filename = data.get('filename')
         if not filename:
             return jsonify({'error': 'No filename'}), 400
-        csv_path = CSV_DIR / filename if not os.path.isabs(filename) else Path(filename)
+        filename = os.path.basename(filename)
+        csv_path = CSV_DIR / filename
         if not csv_path.exists():
-            csv_path = BASE_DIR / filename
+            bundled = BASE_DIR / "csv_files" / filename
+            if bundled.exists():
+                shutil.copy2(bundled, csv_path)
         if not csv_path.exists():
             return jsonify({'error': 'File not found'}), 404
         
@@ -177,8 +193,6 @@ def download():
             return jsonify({'error': 'No recordings'}), 400
         
         session = get_session()
-        downloaded = 0
-        
         def fetch(item):
             url, path = item
             try:
