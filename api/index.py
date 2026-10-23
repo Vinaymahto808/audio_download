@@ -1,4 +1,5 @@
-from app import demo
+from app_flask import app
 
-# Export the app for Vercel
-app = demo
+# For Vercel
+application = app
+app = app

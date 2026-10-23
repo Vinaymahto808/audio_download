@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCube Call Recordings Downloader</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f0f; color: #e0e0e0; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { color: #fff; margin-bottom: 10px; font-size: 28px; }
+        .subtitle { color: #888; margin-bottom: 30px; }
+        .card { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+        .card-title { color: #fff; margin-bottom: 15px; font-size: 18px; }
+        select { background: #252525; color: #e0e0e0; border: 1px solid #444; padding: 10px 15px; border-radius: 6px; font-size: 14px; width: 100%; max-width: 400px; }
+        button { background: #0066ff; color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; }
+        button:hover { background: #0052cc; }
+        button:disabled { background: #333; cursor: not-allowed; }
+        .stats { display: flex; gap: 30px; margin: 15px 0; }
+        .stat { color: #888; }
+        .stat-value { color: #fff; font-weight: 600; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th { background: #252525; padding: 10px; text-align: left; color: #fff; font-size: 13px; border: 1px solid #333; }
+        td { padding: 8px 10px; border: 1px solid #333; font-size: 13px; }
+        tr:hover { background: #252525; }
+        .status { margin-top: 15px; padding: 10px; background: #252525; border-radius: 6px; display: none; }
+        .status.show { display: block; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎙️ MCube Call Recordings Downloader</h1>
+        <p class="subtitle">Download call recordings from CSV files (>5 seconds)</p>
+        
+        <div class="card">
+            <div class="card-title">Select CSV File</div>
+            <select id="csvSelect">
+                <option value="">-- Select CSV --</option>
+                {% for file in files %}
+                <option value="{{ file.split('\\')[-1].split('/')[-1] }}">{{ file.split('\\')[-1].split('/')[-1] }}</option>
+                {% endfor %}
+            </select>
+            <button onclick="loadCSV()" style="margin-left: 10px;">Load CSV</button>
+        </div>
+        
+        <div class="card" id="previewCard" style="display: none;">
+            <div class="card-title">Preview (Recordings > 5s)</div>
+            <div class="stats">
+                <div class="stat">Total Rows: <span class="stat-value" id="totalRows">0</span></div>
+                <div class="stat">Recordings > 5s: <span class="stat-value" id="filteredRows">0</span></div>
+            </div>
+            <button onclick="downloadAll()" id="downloadBtn">Download All as ZIP</button>
+            <div class="status" id="status"></div>
+            <div style="overflow-x: auto;">
+                <table id="previewTable">
+                    <thead>
+                        <tr>
+                            <th>Customer Number</th>
+                            <th>Customer Name</th>
+                            <th>Dial Status</th>
+                            <th>Start Time</th>
+                            <th>Duration (s)</th>
+                            <th>Agent Name</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let currentFile = '';
+        async function loadCSV() {
+            const select = document.getElementById('csvSelect');
+            currentFile = select.value;
+            if (!currentFile) { alert('Select a CSV file'); return; }
+            const res = await fetch('/api/load/' + encodeURIComponent(currentFile));
+            const data = await res.json();
+            if (data.error) { alert(data.error); return; }
+            document.getElementById('totalRows').textContent = data.total;
+            document.getElementById('filteredRows').textContent = data.filtered;
+            const tbody = document.querySelector('#previewTable tbody');
+            tbody.innerHTML = '';
+            data.preview.forEach(row => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td>${row['Customer Number']||''}</td><td>${row['Customer Name']||''}</td><td>${row['Dial Status']||''}</td><td>${row['Start Time']||''}</td><td>${row['DurationSec']||0}</td><td>${row['Agent Name']||''}</td>`;
+                tbody.appendChild(tr);
+            });
+            document.getElementById('previewCard').style.display = 'block';
+        }
+        async function downloadAll() {
+            const btn = document.getElementById('downloadBtn');
+            const status = document.getElementById('status');
+            btn.disabled = true;
+            btn.textContent = 'Downloading... (This may take time)';
+            status.textContent = 'Starting download... Please wait. Vercel has 60s timeout so large downloads may fail.';
+            status.classList.add('show');
+            try {
+                const res = await fetch('/api/download', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({filename: currentFile})
+                });
+                if (res.headers.get('content-type').includes('application/json')) {
+                    const data = await res.json();
+                    alert(data.error);
+                } else {
+                    const blob = await res.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'recordings_' + currentFile.replace('.csv','') + '_gt5s.zip';
+                    a.click();
+                    status.textContent = 'Download complete!';
+                }
+            } catch(e) {
+                alert('Error: ' + e.message);
+                status.textContent = 'Error occurred';
+            }
+            btn.disabled = false;
+            btn.textContent = 'Download All as ZIP';
+        }
+    </script>
+</body>
+</html>
