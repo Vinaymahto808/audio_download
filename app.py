@@ -13,27 +13,27 @@ import threading
 import time
 import glob
 import shutil
+import tkinter as tk
+from tkinter import filedialog
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
 BASE_DIR = Path(__file__).resolve().parent
-# All Report_*.csv live here (separate from the project root)
 CSV_DIR = Path(os.environ.get("CSV_DIR", BASE_DIR / "csv_files"))
 DL_WORKERS = int(os.environ.get("DL_WORKERS", "64"))
 CHUNK = 256 * 1024
 ZIP_COMPRESS_LEVEL = int(os.environ.get("ZIP_COMPRESS_LEVEL", "1"))
 PREVIEW_ROWS = 500
 
+DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", BASE_DIR))
 
 def ensure_csv_dir():
-    """Create csv_files/ and move any Report_*.csv lying in the project root into it."""
     try:
         CSV_DIR.mkdir(parents=True, exist_ok=True)
         for old in glob.glob(str(BASE_DIR / "Report_*.csv")):
             src = Path(old)
             dest = CSV_DIR / src.name
             if dest.exists():
-                # never overwrite: keep both, just tag the older one
                 dest = CSV_DIR / f"{src.stem}__{int(src.stat().st_mtime)}{src.suffix}"
             try:
                 shutil.move(str(src), str(dest))
@@ -42,9 +42,20 @@ def ensure_csv_dir():
     except Exception:
         pass
 
-
 ensure_csv_dir()
 
+def select_download_folder():
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        folder = filedialog.askdirectory(initialdir=str(DOWNLOAD_DIR), title="Select Download Folder")
+        root.destroy()
+        if folder:
+            return folder
+        return str(DOWNLOAD_DIR)
+    except Exception as e:
+        return str(DOWNLOAD_DIR)
 
 def parse_duration(d):
     if not d or pd.isna(d):
@@ -61,7 +72,6 @@ def parse_duration(d):
         parts.insert(0, 0)
     return parts[0]*3600 + parts[1]*60 + parts[2]
 
-
 def get_filtered(df, min_sec=5):
     df = df.copy()
     df["dur_sec"] = df["Total Duration"].apply(parse_duration)
@@ -69,12 +79,9 @@ def get_filtered(df, min_sec=5):
     df = df[df["Recording URL"].notna() & (df["Recording URL"].astype(str).str.strip() != "")]
     return df
 
-
-# ---------- CSV cache: switching between CSVs is instant after first read ----------
 _csv_cache = OrderedDict()
 _cache_lock = threading.Lock()
 CACHE_SIZE = 3
-
 
 def read_csv_cached(csv_path):
     st = os.stat(csv_path)
@@ -91,13 +98,10 @@ def read_csv_cached(csv_path):
             _csv_cache.popitem(last=False)
     return df, filtered
 
-
 def list_csvs():
-    """Newest first. Scans csv_files/ (and legacy root location)."""
     files = glob.glob(str(CSV_DIR / "Report_*.csv")) + glob.glob(str(BASE_DIR / "Report_*.csv"))
     files = [str(Path(f).resolve()) for f in files]
     return sorted(files, key=os.path.getmtime, reverse=True)
-
 
 def load_from_path(csv_path):
     try:
@@ -121,9 +125,7 @@ def load_from_path(csv_path):
     except Exception as e:
         return pd.DataFrame(), f"Error: {e}", csv_path
 
-
 def _import_upload(uploaded_file):
-    """Copy an uploaded CSV into csv_files/ and return its new path."""
     if uploaded_file is None:
         return None
     src = None
@@ -142,7 +144,6 @@ def _import_upload(uploaded_file):
     except Exception:
         return str(dest.resolve()) if dest.exists() else src
 
-
 def load_csv(uploaded_file=None):
     try:
         csv_path = _import_upload(uploaded_file)
@@ -155,7 +156,6 @@ def load_csv(uploaded_file=None):
     except Exception as e:
         return pd.DataFrame(), f"Error: {e}", None
 
-
 def next_csv(current_path):
     files = list_csvs()
     if not files:
@@ -167,11 +167,8 @@ def next_csv(current_path):
         nxt = files[0]
     return load_from_path(nxt)
 
-
-# ---------- fast HTTP: reused connections + retries ----------
 _session = None
 _session_lock = threading.Lock()
-
 
 def get_session():
     global _session
@@ -188,7 +185,6 @@ def get_session():
             _session = s
         return _session
 
-
 def _zip_up_to_date(zip_path, files_on_disk):
     if not files_on_disk or not zip_path.exists() or zip_path.stat().st_size == 0:
         return False
@@ -200,8 +196,7 @@ def _zip_up_to_date(zip_path, files_on_disk):
     except Exception:
         return False
 
-
-def download_all(uploaded_file=None, current_path=None, progress=gr.Progress()):
+def download_all(uploaded_file=None, current_path=None, download_folder=None, progress=gr.Progress()):
     try:
         csv_path = _import_upload(uploaded_file)
         if csv_path is None or not os.path.exists(csv_path):
@@ -214,10 +209,16 @@ def download_all(uploaded_file=None, current_path=None, progress=gr.Progress()):
 
         df, f = read_csv_cached(csv_path)
         csv_base = Path(csv_path).stem
-        out_dir = Path(f"recordings_{csv_base}_gt5s")
+        
+        if download_folder and os.path.exists(download_folder):
+            base_out = Path(download_folder)
+        else:
+            base_out = DOWNLOAD_DIR
+        base_out.mkdir(parents=True, exist_ok=True)
+        
+        out_dir = base_out / f"recordings_{csv_base}_gt5s"
         out_dir.mkdir(exist_ok=True)
 
-        # build (url, path) list without a slow iterrows() loop
         urls_ser = f["Recording URL"].astype("string").str.strip()
         names = urls_ser.str.rsplit("/", n=1).str[-1].fillna("")
         id_col = "Call ID" if "Call ID" in f.columns else ("Refid" if "Refid" in f.columns else None)
@@ -230,7 +231,7 @@ def download_all(uploaded_file=None, current_path=None, progress=gr.Progress()):
         urls, seen = [], set()
         for url, name in zip(urls_ser.tolist(), names.tolist()):
             name = name or "recording.wav"
-            if name in seen:  # avoid clobbering duplicate filenames
+            if name in seen:
                 stem, ext = os.path.splitext(name)
                 k = 1
                 while f"{stem}_{k}{ext}" in seen:
@@ -288,13 +289,12 @@ def download_all(uploaded_file=None, current_path=None, progress=gr.Progress()):
 
         okc = sum(1 for _, ok, _ in results if ok)
         failed = total - okc
-        zip_path = Path(f"recordings_{csv_base}_gt5s.zip")
+        zip_path = base_out / f"recordings_{csv_base}_gt5s.zip"
         files_on_disk = [p for _, p in urls if p.exists() and p.stat().st_size > 0]
 
         if _zip_up_to_date(zip_path, files_on_disk):
             zip_msg = "ZIP already up-to-date (skipped)"
         else:
-            # level 1 = ~4x faster than default level 6, only ~9% bigger for WAV
             t0 = time.time()
             try:
                 with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED,
@@ -316,12 +316,11 @@ def download_all(uploaded_file=None, current_path=None, progress=gr.Progress()):
     except Exception as e:
         return None, f"Error: {e}"
 
-
 with gr.Blocks(title="MCube Call Recordings Downloader") as demo:
     gr.Markdown(
         "# MCube Call Recordings Downloader\n"
         f"CSV folder: `{CSV_DIR.name}` — har CSV ke recordings apne alag folder me "
-        "(`recordings_<csv>_gt5s`)."
+        "download honge."
     )
     with gr.Row():
         csv_upload = gr.File(label="Upload CSV (Report_*.csv)", file_types=[".csv"])
@@ -331,6 +330,12 @@ with gr.Blocks(title="MCube Call Recordings Downloader") as demo:
     status = gr.Textbox(label="Status", interactive=False)
     csv_path_state = gr.State(value=None)
     df_out = gr.Dataframe(label="Recordings > 5s (preview)", wrap=True, interactive=False, max_height=400)
+    
+    with gr.Row():
+        folder_btn = gr.Button("📁 Select Download Folder", variant="secondary")
+        folder_path = gr.Textbox(label="Download Folder", value=str(DOWNLOAD_DIR), interactive=False)
+    folder_state = gr.State(value=str(DOWNLOAD_DIR))
+    
     dl_btn = gr.Button("Download All (>5s) Instantly", variant="primary")
     zip_out = gr.File(label="Download ZIP")
     dl_status = gr.Textbox(label="Download Status", interactive=False)
@@ -342,11 +347,16 @@ with gr.Blocks(title="MCube Call Recordings Downloader") as demo:
     def _next(p):
         df, msg, np = next_csv(p)
         return df, msg, np
-
+    
+    def _select_folder():
+        folder = select_download_folder()
+        return folder, folder
+    
     load_btn.click(_load, inputs=[csv_upload], outputs=[df_out, status, csv_path_state])
     next_btn.click(_next, inputs=[csv_path_state], outputs=[df_out, status, csv_path_state])
+    folder_btn.click(_select_folder, inputs=[], outputs=[folder_path, folder_state])
     demo.load(_load, inputs=[csv_upload], outputs=[df_out, status, csv_path_state])
-    dl_btn.click(download_all, inputs=[csv_upload, csv_path_state], outputs=[zip_out, dl_status])
+    dl_btn.click(download_all, inputs=[csv_upload, csv_path_state, folder_state], outputs=[zip_out, dl_status])
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
