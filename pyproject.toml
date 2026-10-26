@@ -1,0 +1,20 @@
+[project]
+name = "mcube-automate-sheet"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Vinaymahto808", email = "vinaykumar16244@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "gradio>=6.30.0",
+    "requests>=2.32.0",
+]
+
+[project.scripts]
+mcube-automate-sheet = "mcube_automate_sheet:main"
+
+[build-system]
+requires = ["uv_build>=0.12.18,<0.13.0"]
+build-backend = "uv_build"
